@@ -4,13 +4,23 @@ import pprint
 import argparse
 
 parser = argparse.ArgumentParser(
-                    prog='mitoWHAT',
-                    description='What the program does',
+                    prog='mt-paths',
+                    description='Given an mtDNA phylogeny (currently phylotree), and a set of mutations, calculate a set of paths through the phylogeny that explains the mutations.',
                     epilog='Text at the bottom of help')
-parser.add_argument('phylotree', type=argparse.FileType('rt'))           # positional argument
-parser.add_argument('-m', '--muts-positions', nargs='+')      # option that takes a value
+parser.add_argument('phylotree', type=argparse.FileType('rt'))
+parser.add_argument('-m', '--muts-positions', nargs='+')
+parser.add_argument('-b', '--bam') ## needs to be implemented!
 parser.add_argument('-v', '--verbose', action='store_true')  # on/off flag
 args = parser.parse_args()
+
+
+########################3
+#### we need to:
+##    - add the ability to read a bam file
+##    - identify "foundational" mutations / mutations with some amount of evidence for them ("evidence" will ultimately be defined on the command line)
+##    - have some way (given a position) to get a list of bases at that position: maybe pileup[pos] = {'A' : 6, 'a', 4, etc}?
+##    - somehow distinguish btwn bases that could be deamination: get_support(pos, allele1, allele2)? returns (5, 3), 
+##    - I'm currently only matching on "having a mutation at a given position", not based on the actual alleles identified in that position, so we need to do that
 
 
 tree = []
@@ -29,7 +39,8 @@ for line in args.phylotree:
 tree2 = []
 ## mapping mutations back to the tree (mut:[line1, line2, line3])
 muts_list = defaultdict(list)
-muts_pos = defaultdict(list)
+## mapping mutation positions back to the tree (mut_pos:[(line1, mut), (line2, mut), (line3, mut)])
+muts_pos_list = defaultdict(list)
 
 line_num = 0
 for line in tree:
@@ -77,7 +88,7 @@ for line in tree:
 
         print('mutation', mut_pos, m)
         muts_list[m] += [line_num]
-        muts_pos[mut_pos] += [(line_num,m)]
+        muts_pos_list[mut_pos] += [(line_num,m)]
         pass
 
     line_num += 1
