@@ -1,7 +1,8 @@
-import sys
 from collections import defaultdict
-import pprint
+from Bio import SeqIO
 import argparse
+import pysam
+
 
 parser = argparse.ArgumentParser(
                     prog='mt-paths',
@@ -9,19 +10,169 @@ parser = argparse.ArgumentParser(
                     epilog='Text at the bottom of help')
 parser.add_argument('phylotree', type=argparse.FileType('rt'))
 parser.add_argument('-m', '--muts-positions', nargs='+')
-parser.add_argument('-b', '--bam') ## needs to be implemented!
+# parser.add_argument('-b', '--bam') ## needs to be implemented!
 parser.add_argument('-v', '--verbose', action='store_true')  # on/off flag
+parser.add_argument("-b", "--bamfile", required=True, help="Input BAM file")
+parser.add_argument("-r", "--reference", required=True, help="Reference FASTA file")
+parser.add_argument("-c", "--min_coverage", type=int, default=5, help="Minimum coverage to call consensus") # Need to hook this up to actual functions
+parser.add_argument("-a", "--min_agreement", type=float, default=0.8, help="Minimum agreement fraction to call consensus") # Need to hook this up to actual functions
+parser.add_argument("--genbank_file", help="Path to the genbank file.")
+
 args = parser.parse_args()
 
 
 ########################3
 #### we need to:
-##    - add the ability to read a bam file
-##    - identify "foundational" mutations / mutations with some amount of evidence for them ("evidence" will ultimately be defined on the command line)
-##    - have some way (given a position) to get a list of bases at that position: maybe pileup[pos] = {'A' : 6, 'a', 4, etc}?
+##    - add the ability to read a bam file - DONE
+##    - identify "foundational" mutations / mutations with some amount of evidence for them ("evidence" will ultimately be defined on the command line) - DONE
+##    - have some way (given a position) to get a list of bases at that position: maybe pileup[pos] = {'A' : 6, 'a', 4, etc}? -DONE: base_counts[pos]
 ##    - somehow distinguish btwn bases that could be deamination: get_support(pos, allele1, allele2)? returns (5, 3), 
 ##    - I'm currently only matching on "having a mutation at a given position", not based on the actual alleles identified in that position, so we need to do that
+##    - Once we have a clear idea of what the program looks like, pull this script apart into multiple files so it stays clean.
 
+
+######## ~~Jonas' beautiful garden of Zen~~  ########
+
+
+def extract_protein_coding_regions(genkbank_file):
+    """Extract and print protein-coding regions from a GenBank record."""
+    regions = []
+    record = SeqIO.read(genkbank_file, "genbank")
+    for feature in record.features:
+        if feature.type == "CDS":
+            location = feature.location
+            regions.append((location.start, location.end))
+    return regions
+
+
+def is_number_overlapped(ranges, num):
+    """Check if a number is overlapped by any range in a sorted list of ranges."""
+    # Ensure ranges are sorted by their start positions
+    ranges = sorted(ranges, key=lambda x: (x[0], x[1]))
+
+    # Implement a manual binary search
+    lo, hi = 0, len(ranges)
+
+    while lo < hi:
+        mid = (lo + hi) // 2
+        start, end = ranges[mid]
+
+        if num < start:
+            hi = mid
+        elif num > end:
+            lo = mid + 1
+        else:
+            return True  # num is within the current range
+
+    # Check the previous range to ensure no overlooked overlaps
+    if lo > 0:
+        start, end = ranges[lo - 1]
+        if start <= num <= end:
+            return True
+
+    return False
+
+
+def convert_to_uppercase(case_sensitive_bases: dict):
+    '''Converts a base_count dictionary from {'c': 3, 'C': 5, 'T': 2} to {'C': 8, 'T': 2}'''
+    converted = defaultdict(int)
+    for key, value in case_sensitive_bases.items():
+        converted[key.upper()] += value 
+    return converted
+
+
+def passes_filters(bases: dict, min_agreement: float = 0.8, min_coverage: int = 5) -> bool:
+    '''Does most of the heavy lifting to filter out unfitting positions. Currently looks at:
+    (1) Strand-aware deamination
+    (2) Non-majority bases making up at least 1-$min_agreement percent of all bases
+    (3) Minimum coverage
+    '''
+
+    # Removing likely deamination
+    majority_base = max(bases, key=bases.get)
+    keys = set(bases.keys())
+
+    # Don't remove if any Gs are on sense strand or any Cs on antisense
+    if set(['C', 't']).issubset(keys) and majority_base == 'C' and 'c' not in bases:
+        bases.pop('t', None)
+    if set(['g', 'A']).issubset(keys) and majority_base == 'g' and 'a' not in bases:
+        bases.pop('A', None)
+
+    bases = convert_to_uppercase(bases)
+
+    sum_val = sum(bases.values())
+    max_val = max(bases.values())
+    if max_val / sum_val > min_agreement:
+        return False
+    
+    # Removing low coverage, note: deamination is already removed at this point
+    if sum_val < min_coverage:
+        return False
+    
+    return True
+
+
+def generate_base_counts(bamfile, reference_fasta):
+    bam = pysam.AlignmentFile(bamfile, "rb")
+    reference = SeqIO.to_dict(SeqIO.parse(reference_fasta, "fasta"))
+        
+    # Iterate over each reference sequence
+    for ref_name, ref_seq in reference.items():
+        ref_length = len(ref_seq)
+        # Create an array to store base counts for each position
+        base_counts = [{} for _ in range(ref_length)]
+        
+        # Iterate over each pileup column
+        for pileupcolumn in bam.pileup(ref_name):
+            pos = pileupcolumn.pos + 1 
+            if pos >= ref_length:
+                continue
+            for pileupread in pileupcolumn.pileups:
+                if not pileupread.is_del and not pileupread.is_refskip:
+                    base = pileupread.alignment.query_sequence[pileupread.query_position]
+
+                    if pileupread.alignment.is_reverse:
+                        base = base.lower()
+
+                    base_counts[pos][base] = base_counts[pos].get(base, 0) + 1
+    return base_counts
+
+
+def uncalled_positions(base_counts, protein_coding_regions, min_agreement: float = 0.8, min_coverage: int = 5):
+    uncalled_positions = []
+
+    # Create the consensus sequence
+    # consensus_seq = []
+    for pos in range(len(base_counts)):
+        if protein_coding_regions:
+            if not is_number_overlapped(protein_coding_regions, pos):
+                continue
+
+        if base_counts[pos]:
+
+            bases = base_counts[pos]
+
+            if passes_filters(bases, min_agreement, min_coverage):
+                uncalled_positions.append(pos)
+
+            #     consensus_base = max(base_counts[pos], key=base_counts[pos].get)
+            #     consensus_seq.append(consensus_base)
+            # else:
+            #     consensus_seq.append('N')        
+        # consensus_seq = ''.join(consensus_seq)
+    return uncalled_positions
+
+
+if args.genbank_file:
+    protein_coding_regions = extract_protein_coding_regions(args.genbank_file)
+else:
+    protein_coding_regions = None
+
+base_counts = generate_base_counts(args.bamfile, args.reference)
+# uncalled_positions(base_counts, protein_coding_regions, args.min_agreement, args.min_coverage)
+# exit()
+
+####### Ben's eldritch horror #######
 
 tree = []
 # pos   = sys.argv[2]
@@ -118,7 +269,7 @@ def find_paths(my_pos):
         ## for each place where it occurs, walk back up the tree to reconstruct the path
         for mln in mut_line_nums:
             depth = 1000
-            path = []
+            # path = []
             path_details = {'mut':mut,
                             'mut_line':mln,
                             'path':[],
