@@ -12,11 +12,12 @@ parser.add_argument('phylotree', type=argparse.FileType('rt'))
 parser.add_argument('-m', '--muts-positions', nargs='+')
 # parser.add_argument('-b', '--bam') ## needs to be implemented!
 parser.add_argument('-v', '--verbose', action='store_true')  # on/off flag
+parser.add_argument('-d', '--debug', action='store_true')  # on/off flag
 parser.add_argument("-b", "--bamfile", required=True, help="Input BAM file")
 parser.add_argument("-r", "--reference", required=True, help="Reference FASTA file")
-parser.add_argument("-c", "--min_coverage", type=int, default=5, help="Minimum coverage to call consensus") # Need to hook this up to actual functions
-parser.add_argument("-a", "--min_agreement", type=float, default=0.8, help="Minimum agreement fraction to call consensus") # Need to hook this up to actual functions
-parser.add_argument("--genbank_file", help="Path to the genbank file.")
+parser.add_argument("-c", "--min-coverage", type=int, default=5, help="Minimum coverage to call consensus") # Need to hook this up to actual functions
+parser.add_argument("-a", "--min-agreement", type=float, default=0.8, help="Minimum agreement fraction to call consensus") # Need to hook this up to actual functions
+parser.add_argument("--genbank-file", help="Path to the genbank file.")
 
 args = parser.parse_args()
 
